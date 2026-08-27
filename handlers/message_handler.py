@@ -2,11 +2,18 @@ from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters
 from utils.auth import get_spotify_client
 from handlers.music import handle_track_search, handle_album_search, handle_artist_search
+from admin.admin import handle_admin_text
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
+
+    # Admin panel text flows (ban target, sponsor add, Spotify creds, etc.)
+    # take priority — they're only ever set right after an admin taps a
+    # button in /admin.
+    if await handle_admin_text(update, context):
+        return
 
     if context.user_data.get('awaiting_search_track'):
         context.user_data['awaiting_search_track'] = False

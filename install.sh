@@ -171,24 +171,48 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
 ok "Database '${DB_NAME}' and user '${DB_USER}' are ready."
 
-# --- 5. Bot / Telegram configuration ---
+# --- 5. Telegram bot token ---
+# The token lives in config/bot_settings.json (not .env), so re-running
+# this script on an existing install never wipes it out. If one is
+# already configured, we leave it alone and just confirm that.
 header
-info "Telegram bot configuration..."
-BOT_TOKEN=$(ask_secret "Bot token (from @BotFather)")
+info "Telegram bot token..."
+
+EXISTING_TOKEN=""
+if [[ -f "${INSTALL_DIR}/venv/bin/python" ]]; then
+    EXISTING_TOKEN=$("${INSTALL_DIR}/venv/bin/python" - <<-'PYEOF' 2>/dev/null
+	import sys
+	sys.path.insert(0, ".")
+	try:
+	    from config import bot_settings
+	    print(bot_settings.get_bot_token())
+	except Exception:
+	    pass
+	PYEOF
+    )
+fi
+
+if [[ -n "${EXISTING_TOKEN}" ]]; then
+    ok "Bot token already configured — keeping it."
+    BOT_TOKEN="${EXISTING_TOKEN}"
+else
+    BOT_TOKEN=""
+    while [[ -z "${BOT_TOKEN}" ]]; do
+        BOT_TOKEN=$(ask_secret "Bot token (from @BotFather)")
+        [[ -z "${BOT_TOKEN}" ]] && warn "A bot token is required to start the bot."
+    done
+fi
+
 ADMIN_USER_IDS=$(ask "Owner admin Telegram ID(s), comma-separated" "")
 
-# --- 6. Spotify configuration (optional) ---
-header
-info "Spotify configuration (press Enter to skip, can be added later)..."
-SPOTIPY_CLIENT_ID=$(ask "Spotify Client ID" "")
-SPOTIPY_CLIENT_SECRET=$(ask_secret "Spotify Client Secret")
-SPOTIPY_REDIRECT_URI=$(ask "Spotify Redirect URI" "http://localhost:8888/callback")
+info "Spotify isn't configured here — once the bot is running, set it from "
+info "inside Telegram: /admin → 🎵 Spotify Settings."
 
-# --- 7. Write .env ---
+# --- 6. Write .env (infra only — no bot token, no Spotify creds; those
+#        live in config/bot_settings.json instead, see above) ---
 header
 info "Writing .env file..."
 cat > "${INSTALL_DIR}/.env" <<-EOF
-BOT_TOKEN=${BOT_TOKEN}
 ADMIN_USER_IDS=${ADMIN_USER_IDS}
 
 DB_HOST=localhost
@@ -196,14 +220,22 @@ DB_PORT=5432
 DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
-
-SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
-SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
-SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI}
 EOF
 chmod 600 "${INSTALL_DIR}/.env"
 chown root:root "${INSTALL_DIR}/.env"
 ok ".env file created."
+
+# --- 7. Persist the bot token into bot_settings.json ---
+header
+info "Saving bot token to config/bot_settings.json..."
+(
+    cd "${INSTALL_DIR}" && ./venv/bin/python - "${BOT_TOKEN}" <<-'PYEOF'
+	import sys
+	from config import bot_settings
+	bot_settings.set_bot_token(sys.argv[1])
+	PYEOF
+)
+ok "Bot token saved."
 
 # --- 8. systemd service ---
 header

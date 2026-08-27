@@ -1,11 +1,25 @@
 """config/bot_settings.py
 
 Runtime settings the admin can change from inside Telegram (via /admin),
-stored as JSON so they persist across restarts without touching .env.
+stored as JSON (bot_settings.json, chmod 600) so they persist across
+restarts and across re-running install.sh, without touching .env.
 
-Secrets that never change at runtime (bot token, Spotify credentials,
-Postgres credentials) stay in .env / db/database.py — this file is only
-for things the admin edits through the bot itself.
+This now also holds BOT_TOKEN and the Spotify app credentials
+(spotify_client_id/secret/redirect_uri):
+  - Spotify credentials are fully self-service — set/changed any time from
+    /admin → 🎵 Spotify Settings, no restart needed.
+  - BOT_TOKEN can't be self-service (the bot needs it just to start), but
+    living here means it's asked for once, at first run, and is never
+    silently overwritten by re-running install.sh later.
+
+Postgres credentials still live in .env / db/database.py, since they're
+needed before this file's storage is even meaningful (nothing here
+depends on the DB, but DB_* has no local-file equivalent that's any more
+secure than .env).
+
+For migration: if bot_settings.json doesn't have a value yet, it's
+pulled once from the matching .env var (BOT_TOKEN, SPOTIPY_CLIENT_ID,
+etc.) and saved here. After that, .env is ignored for these keys.
 """
 import json
 import logging
@@ -28,7 +42,41 @@ def _get_default_settings() -> dict:
         "sponsor_channels": [],
         "membership_required": False,
         "installed_at": "",
+        # Secrets below live here (bot_settings.json, chmod 600) instead of
+        # .env so they survive re-running install.sh and can be changed by
+        # an admin from inside the bot (Spotify creds) without redeploying.
+        # bot_token can't be self-service (the bot needs it just to start),
+        # but keeping it here means it's only ever entered once, at
+        # install/first-run time, and never overwritten by a later install.
+        "bot_token": "",
+        "spotify_client_id": "",
+        "spotify_client_secret": "",
+        "spotify_redirect_uri": "http://localhost:8888/callback",
     }
+
+
+# Env vars are only consulted once, to migrate values from an old .env into
+# bot_settings.json the first time this runs. After that, bot_settings.json
+# is the single source of truth and .env is ignored for these keys.
+_ENV_MIGRATION_MAP = {
+    "bot_token": "BOT_TOKEN",
+    "spotify_client_id": "SPOTIPY_CLIENT_ID",
+    "spotify_client_secret": "SPOTIPY_CLIENT_SECRET",
+    "spotify_redirect_uri": "SPOTIPY_REDIRECT_URI",
+}
+
+
+def _migrate_from_env(data: dict) -> bool:
+    """Fill in any blank secret fields from .env, once. Returns True if
+    anything changed (caller should persist)."""
+    changed = False
+    for key, env_name in _ENV_MIGRATION_MAP.items():
+        if not data.get(key):
+            env_val = os.getenv(env_name)
+            if env_val:
+                data[key] = env_val
+                changed = True
+    return changed
 
 
 def _load() -> dict:
@@ -52,6 +100,13 @@ def _load() -> dict:
     for key, value in defaults.items():
         if key not in data:
             data[key] = value
+
+    if _migrate_from_env(data):
+        try:
+            _save(data)
+        except Exception:
+            # Non-fatal: worst case we re-attempt the migration next load.
+            pass
 
     _cache = data
     return data
@@ -193,6 +248,50 @@ def set_membership_required(value: bool) -> None:
     data = _load()
     data["membership_required"] = bool(value)
     _save(data)
+
+
+# ------------------------------------------------------------------
+# Secrets: bot token / Spotify app credentials
+# ------------------------------------------------------------------
+# Spotify credentials are read fresh on every call (not cached at import
+# time) so an admin changing them via /admin takes effect immediately,
+# with no restart.
+
+def get_bot_token() -> str:
+    return (_load().get("bot_token") or "").strip()
+
+
+def set_bot_token(token: str) -> None:
+    data = _load()
+    data["bot_token"] = (token or "").strip()
+    _save(data)
+
+
+def get_spotify_client_id() -> str:
+    return (_load().get("spotify_client_id") or "").strip()
+
+
+def get_spotify_client_secret() -> str:
+    return (_load().get("spotify_client_secret") or "").strip()
+
+
+def get_spotify_redirect_uri() -> str:
+    return (_load().get("spotify_redirect_uri") or "").strip() or "http://localhost:8888/callback"
+
+
+def set_spotify_credentials(client_id: str = None, client_secret: str = None, redirect_uri: str = None) -> None:
+    data = _load()
+    if client_id is not None:
+        data["spotify_client_id"] = client_id.strip()
+    if client_secret is not None:
+        data["spotify_client_secret"] = client_secret.strip()
+    if redirect_uri is not None:
+        data["spotify_redirect_uri"] = redirect_uri.strip()
+    _save(data)
+
+
+def is_spotify_configured() -> bool:
+    return bool(get_spotify_client_id() and get_spotify_client_secret())
 
 
 # ------------------------------------------------------------------

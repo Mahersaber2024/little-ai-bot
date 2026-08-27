@@ -1,4 +1,3 @@
-import os
 import time
 import uuid
 
@@ -7,12 +6,9 @@ from spotipy.oauth2 import SpotifyOAuth
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from config import bot_settings
 from db import database
 from utils.permissions import get_admin_ids, is_admin
-
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI", "http://localhost:8888/callback")
 
 SCOPE = (
     "user-read-email user-read-private "
@@ -24,10 +20,12 @@ SCOPE = (
 
 
 def _make_oauth() -> SpotifyOAuth:
+    # Read fresh every time (not module-level constants) so an admin
+    # changing the Spotify app credentials via /admin applies immediately.
     return SpotifyOAuth(
-        client_id=SPOTIFY_CLIENT_ID,
-        client_secret=SPOTIFY_CLIENT_SECRET,
-        redirect_uri=SPOTIFY_REDIRECT_URI,
+        client_id=bot_settings.get_spotify_client_id(),
+        client_secret=bot_settings.get_spotify_client_secret(),
+        redirect_uri=bot_settings.get_spotify_redirect_uri(),
         scope=SCOPE,
         cache_path=None,
     )
@@ -84,6 +82,17 @@ async def ensure_token(
     they are never shown a login button themselves."""
 
     if is_admin(user_id):
+        if not bot_settings.is_spotify_configured():
+            text = (
+                "Spotify isn't configured yet.\n"
+                "Open /admin → 🎵 Spotify Settings and set the Client ID/Secret first."
+            )
+            if via_query:
+                await update.callback_query.edit_message_text(text)
+            else:
+                await update.message.reply_text(text)
+            return None
+
         token_info = database.get_token(user_id)
         if token_info:
             token_info = _refresh_if_needed(token_info, user_id)

@@ -3,8 +3,9 @@ import logging
 from aiohttp import web
 from spotipy.oauth2 import SpotifyOAuth
 
+from config import bot_settings
 from db import database
-from utils.auth import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, SCOPE
+from utils.auth import SCOPE
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ async def handle_callback(request: web.Request) -> web.Response:
         return web.Response(status=400, text="This link is invalid or has expired.")
 
     oauth = SpotifyOAuth(
-        client_id=SPOTIFY_CLIENT_ID,
-        client_secret=SPOTIFY_CLIENT_SECRET,
-        redirect_uri=SPOTIFY_REDIRECT_URI,
+        client_id=bot_settings.get_spotify_client_id(),
+        client_secret=bot_settings.get_spotify_client_secret(),
+        redirect_uri=bot_settings.get_spotify_redirect_uri(),
         scope=SCOPE,
         cache_path=None,
     )
