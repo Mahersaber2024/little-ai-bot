@@ -1,6 +1,5 @@
 import sys
 
-from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler
 
 from config import bot_settings
@@ -13,12 +12,10 @@ from language_guard import register_language_guard_handlers
 from webserver import run_webserver_async
 from db.database import init_db
 
-# .env is only used to migrate an old BOT_TOKEN/Spotify config into
-# bot_settings.json the very first time the bot runs (see
-# config/bot_settings.py::_migrate_from_env). After that, bot_settings.json
-# is authoritative, so re-running install.sh or leaving prompts blank can
-# never wipe out an already-configured token again.
-load_dotenv()
+# There is no .env file anywhere in this project. Every setting the bot
+# needs (DB credentials, admin IDs, bot token, Spotify creds, ...) lives
+# in config/bot_settings.json, written by install.sh and editable from
+# /admin — see config/bot_settings.py for details.
 
 
 def _resolve_bot_token() -> str:

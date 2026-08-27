@@ -1,22 +1,19 @@
 """utils/permissions.py
 
-ADMIN_USER_IDS = the .env-seeded "owner" admin(s) (ADMIN_USER_IDS in .env,
-comma-separated) plus anyone added later via the /admin panel. The .env
-seed always stays admin — it's the fallback so the bot never ends up with
-no admin at all.
+ADMIN_USER_IDS = the "owner" admin(s) seeded once by install.sh
+(bot_settings.json's owner_admin_ids, set at install time and not
+editable from /admin) plus anyone added later via the /admin panel. The
+owner seed always stays admin — it's the fallback so the bot never ends
+up with no admin at all.
 """
-import os
-
 from config import bot_settings
-
-_env_raw = os.getenv("ADMIN_USER_IDS", "")
-OWNER_ADMIN_IDS = [int(x) for x in _env_raw.replace(" ", "").split(",") if x]
 
 
 def get_admin_ids() -> list[int]:
-    """Owner admins (from .env) + admins added at runtime, deduplicated."""
+    """Owner admins (seeded at install) + admins added at runtime, deduplicated."""
+    owner = bot_settings.get_owner_admin_ids()
     dynamic = bot_settings.get_admin_ids()
-    return list(dict.fromkeys(OWNER_ADMIN_IDS + dynamic))
+    return list(dict.fromkeys(owner + dynamic))
 
 
 # Kept as a module-level list for callers that just want a snapshot
@@ -30,9 +27,9 @@ def is_admin(user_id: int) -> bool:
 
 
 def is_owner_admin(user_id: int) -> bool:
-    """True only for .env-seeded admins — used to stop the last owner from
-    being removed via the bot."""
-    return int(user_id) in OWNER_ADMIN_IDS
+    """True only for admins seeded at install time — used to stop the
+    last owner from being removed via the bot."""
+    return int(user_id) in bot_settings.get_owner_admin_ids()
 
 
 def add_admin(user_id: int) -> bool:
@@ -45,7 +42,7 @@ def add_admin(user_id: int) -> bool:
 def remove_admin(user_id: int) -> bool:
     global ADMIN_USER_IDS
     if is_owner_admin(user_id):
-        return False  # owner admins (from .env) can't be removed via the bot
+        return False  # owner admins (seeded at install) can't be removed via the bot
     removed = bot_settings.remove_admin_id(user_id)
     ADMIN_USER_IDS = get_admin_ids()
     return removed

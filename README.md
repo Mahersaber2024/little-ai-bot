@@ -13,14 +13,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Mahersaber2024/little-ai-bot
 The installer installs the bot in `/opt/littleai_bot` by default. It will:
 
 1. Install system dependencies such as Python and PostgreSQL.
-2. Copy or clone the project files and install Python packages into a
-   virtual environment.
-3. Set up the PostgreSQL database and a dedicated database user.
-4. Ask for the bot token (only if one isn't already configured) and the
+2. Set up the PostgreSQL database and a dedicated database user.
+3. Ask for the bot token (only if one isn't already configured) and the
    owner admin ID(s).
-5. Save everything — database credentials, bot token, owner admin
-   ID(s) — into `config/bot_settings.json`. There is no `.env` file
-   anywhere in this project.
+4. Copy or clone the project files and install Python packages into a
+   virtual environment.
+5. Write the `.env` file with the database and admin-ID settings, and
+   save the bot token into `config/bot_settings.json`.
 6. Create and start the `littleai-bot` systemd service.
 
 Spotify API credentials are **not** requested during install. Set them
@@ -57,8 +56,8 @@ The default installation path is:
 /opt/littleai_bot
 ```
 
-Project files, `config/bot_settings.json`, and the Python virtual
-environment are stored in this directory.
+Project files, the `.env` file, and the Python virtual environment are
+stored in this directory.
 
 ## Manual Installation
 
@@ -84,19 +83,23 @@ once the bot is running.
 
 ## Configuration
 
-There is no `.env` file anywhere in this project. Every setting the bot
-needs — database credentials, owner admin ID(s), the bot token, Spotify
-API credentials, bot name, sponsor channels, forced membership,
-logging, other admins — lives in a single file:
-`config/bot_settings.json` (created with `chmod 600`).
+Database credentials and owner admin ID(s) live in `.env`, written once
+by the installer.
 
-- Database credentials, the bot token, and owner admin ID(s) are seeded
-  once by `install.sh`. Re-running the installer on an existing install
-  keeps the current bot token and shows the current owner admin ID(s)
-  as the default, instead of wiping them out.
-- Spotify credentials, and everything else changeable from inside
-  Telegram, can be set or changed any time from `/admin`, with no
-  restart required.
+The bot token and everything an admin can change from inside Telegram —
+Spotify API credentials, bot name, sponsor channels, forced membership,
+logging, other admins — are stored in `config/bot_settings.json`
+instead. This means:
+
+- Re-running `install.sh` (e.g. to update the code) never wipes out an
+  already-configured bot token, unlike writing it to `.env` every time.
+- Spotify credentials can be set or changed any time from `/admin` →
+  🎵 **Spotify Settings**, with no restart required.
+
+If you're upgrading from an older install that had `BOT_TOKEN` /
+`SPOTIPY_*` in `.env`, those values are migrated into
+`config/bot_settings.json` automatically the first time the bot starts;
+`.env` is ignored for those keys afterward.
 
 ## Service Management
 

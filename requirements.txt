@@ -2,5 +2,4 @@ python-telegram-bot==20.0
 spotipy
 aiohttp
 nest_asyncio
-python-dotenv
 psycopg2-binary

@@ -1,19 +1,17 @@
-import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": os.getenv("DB_PORT", "5432"),
-    "database": os.getenv("DB_NAME", "soundScope"),
-    "user": os.getenv("DB_USER", "market_user"),
-    "password": os.getenv("DB_PASSWORD"),
-}
+from config import bot_settings
 
 
 def get_connection():
-    """Return a new PostgreSQL connection."""
-    return psycopg2.connect(**DB_CONFIG)
+    """Return a new PostgreSQL connection.
+
+    Credentials are read fresh from bot_settings.json on every call
+    (there is no .env in this project) so they can be changed without a
+    restart if they're ever updated from /admin.
+    """
+    return psycopg2.connect(**bot_settings.get_db_config())
 
 
 def init_db() -> None:
