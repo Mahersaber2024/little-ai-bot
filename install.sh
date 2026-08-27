@@ -4,7 +4,7 @@
 # Usage:
 #   sudo bash install.sh
 #   or:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/Mahersaber2024/littleai_bot/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/Mahersaber2024/little-ai-bot/main/install.sh)
 # =============================================================
 set -uo pipefail
 
@@ -16,7 +16,7 @@ DEFAULT_INSTALL_DIR="/opt/littleai_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 STATE_FILE="/etc/${SERVICE_NAME}.install_dir"
 PYTHON_BIN="python3"
-REPO_URL="https://github.com/<you>/littleai_bot.git"   # <-- change to your actual repo
+REPO_URL="https://github.com/Mahersaber2024/little-ai-bot.git"
 
 # ============================================================
 # COLORS
@@ -63,7 +63,6 @@ show_banner(){
 }
 
 ask(){
-  # ask "Prompt text" "default_value" -> echoes the answer
   local prompt="$1" default="${2:-}" answer
   if [[ -n "$default" ]]; then
     read -rp "$prompt [$default]: " answer
@@ -135,7 +134,6 @@ ${PYTHON_BIN} -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 
-# Make sure psycopg2 is present even if requirements.txt is missing it
 if ! grep -qi "psycopg2" requirements.txt 2>/dev/null; then
     echo "psycopg2-binary" >> requirements.txt
 fi
