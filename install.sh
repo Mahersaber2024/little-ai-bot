@@ -84,6 +84,18 @@ random_string(){
   tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
 }
 
+# Run a short Python snippet inside the project's venv, from the install
+# dir, with extra args available as sys.argv[1:]. Used everywhere below
+# instead of writing values into an .env file — every setting the bot
+# needs lives in config/bot_settings.json (see config/bot_settings.py).
+run_py(){
+    local script="$1"; shift
+    (cd "${INSTALL_DIR}" && ./venv/bin/python - "$@" <<-PYEOF
+${script}
+PYEOF
+    )
+}
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -152,6 +164,8 @@ if [[ -z "$DB_PASSWORD" ]]; then
     DB_PASSWORD=$(random_string)
     warn "Auto-generated database password: ${DB_PASSWORD}"
 fi
+DB_HOST="localhost"
+DB_PORT="5432"
 
 sudo -u postgres psql -v ON_ERROR_STOP=0 <<-EOSQL
     DO \$\$
@@ -171,25 +185,33 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
 ok "Database '${DB_NAME}' and user '${DB_USER}' are ready."
 
+header
+info "Saving database credentials to config/bot_settings.json..."
+run_py '
+import sys
+from config import bot_settings
+host, port, name, user, password = sys.argv[1:6]
+bot_settings.set_db_config(host=host, port=port, database=name, user=user, password=password)
+' "${DB_HOST}" "${DB_PORT}" "${DB_NAME}" "${DB_USER}" "${DB_PASSWORD}"
+ok "Database credentials saved."
+
 # --- 5. Telegram bot token ---
-# The token lives in config/bot_settings.json (not .env), so re-running
-# this script on an existing install never wipes it out. If one is
-# already configured, we leave it alone and just confirm that.
+# The token lives in config/bot_settings.json, so re-running this script
+# on an existing install never wipes it out.
 header
 info "Telegram bot token..."
 
 EXISTING_TOKEN=""
 if [[ -f "${INSTALL_DIR}/venv/bin/python" ]]; then
-    EXISTING_TOKEN=$("${INSTALL_DIR}/venv/bin/python" - <<-'PYEOF' 2>/dev/null
-	import sys
-	sys.path.insert(0, ".")
-	try:
-	    from config import bot_settings
-	    print(bot_settings.get_bot_token())
-	except Exception:
-	    pass
-	PYEOF
-    )
+    EXISTING_TOKEN=$(run_py '
+import sys
+sys.path.insert(0, ".")
+try:
+    from config import bot_settings
+    print(bot_settings.get_bot_token())
+except Exception:
+    pass
+' 2>/dev/null)
 fi
 
 if [[ -n "${EXISTING_TOKEN}" ]]; then
@@ -203,41 +225,43 @@ else
     done
 fi
 
-ADMIN_USER_IDS=$(ask "Owner admin Telegram ID(s), comma-separated" "")
+header
+info "Saving bot token to config/bot_settings.json..."
+run_py '
+import sys
+from config import bot_settings
+bot_settings.set_bot_token(sys.argv[1])
+' "${BOT_TOKEN}"
+ok "Bot token saved."
+
+# --- 6. Owner admin(s) ---
+# Seeded once here into bot_settings.json's owner_admin_ids. This is the
+# fallback so the bot never ends up with no admin at all — it's not
+# editable from /admin (see utils/permissions.py::is_owner_admin).
+# Re-running the installer on an existing install shows the existing
+# owner list as the default, rather than silently wiping it.
+header
+EXISTING_OWNERS=$(run_py '
+from config import bot_settings
+print(",".join(str(x) for x in bot_settings.get_owner_admin_ids()))
+' 2>/dev/null)
+
+ADMIN_USER_IDS=$(ask "Owner admin Telegram ID(s), comma-separated" "${EXISTING_OWNERS}")
+
+info "Saving owner admin ID(s) to config/bot_settings.json..."
+run_py '
+import sys
+from config import bot_settings
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+ids = [int(x.strip()) for x in raw.split(",") if x.strip()]
+bot_settings.set_owner_admin_ids(ids)
+' "${ADMIN_USER_IDS}"
+ok "Owner admin ID(s) saved."
 
 info "Spotify isn't configured here — once the bot is running, set it from "
 info "inside Telegram: /admin → 🎵 Spotify Settings."
 
-# --- 6. Write .env (infra only — no bot token, no Spotify creds; those
-#        live in config/bot_settings.json instead, see above) ---
-header
-info "Writing .env file..."
-cat > "${INSTALL_DIR}/.env" <<-EOF
-ADMIN_USER_IDS=${ADMIN_USER_IDS}
-
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASSWORD}
-EOF
-chmod 600 "${INSTALL_DIR}/.env"
-chown root:root "${INSTALL_DIR}/.env"
-ok ".env file created."
-
-# --- 7. Persist the bot token into bot_settings.json ---
-header
-info "Saving bot token to config/bot_settings.json..."
-(
-    cd "${INSTALL_DIR}" && ./venv/bin/python - "${BOT_TOKEN}" <<-'PYEOF'
-	import sys
-	from config import bot_settings
-	bot_settings.set_bot_token(sys.argv[1])
-	PYEOF
-)
-ok "Bot token saved."
-
-# --- 8. systemd service ---
+# --- 7. systemd service ---
 header
 info "Creating systemd service..."
 cat > "${SERVICE_FILE}" <<-EOF
@@ -252,7 +276,6 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/little_ai.py
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=${INSTALL_DIR}/.env
 User=root
 
 [Install]
@@ -271,4 +294,6 @@ ok "Installation completed!"
 info "Check status with: systemctl status ${SERVICE_NAME}"
 info "View logs with:    journalctl -u ${SERVICE_NAME} -f"
 info "Install directory: ${INSTALL_DIR}"
+info "All settings (DB, admins, bot token, Spotify) live in:"
+info "  ${INSTALL_DIR}/config/bot_settings.json"
 header
