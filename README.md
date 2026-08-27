@@ -7,7 +7,7 @@ recommendations, and moderate the chat with a small admin panel.
 ## Quick Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/<you>/littleai_bot/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahersaber2024/little-ai-bot/main/install.sh)
 ```
 
 The installer installs the bot in `/opt/littleai_bot` by default. It will:
@@ -59,8 +59,8 @@ stored in this directory.
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip postgresql
 
-git clone https://github.com/<you>/littleai_bot.git
-cd littleai_bot
+git clone https://github.com/Mahersaber2024/little-ai-bot.git
+cd little-ai-bot
 
 python3 -m venv venv
 source venv/bin/activate
