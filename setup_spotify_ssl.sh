@@ -1,18 +1,33 @@
 #!/usr/bin/env bash
 #
-# setup_spotify_ssl.sh  (v2 - coexists with an already-configured nginx)
+# setup_spotify_ssl.sh (v3)
 # ---------------------------------------------------------------
-# Adds spotify.heysolo.online as a SEPARATE, isolated nginx site,
-# alongside your existing heysolo.online config. It does NOT touch:
-#   - /etc/nginx/nginx.conf
-#   - /etc/nginx/sites-available/heysolo.online (or whatever it's named)
-#   - the existing heysolo.online SSL certificate
+# Adds spotify.heysolo.online as an isolated nginx site and gets it
+# a Let's Encrypt certificate, WITHOUT the chicken-and-egg bug from
+# v2 (which wrote an SSL server block pointing at a certificate that
+# didn't exist yet, so nginx -t failed before certbot could even run).
 #
-# nginx can serve unlimited domains on the same 80/443 ports - it
-# picks the right server{} block using the Host header (HTTP) or SNI
-# (HTTPS). So "these ports are already busy" is not actually a
-# conflict, as long as each domain has its own server_name and its
-# own certificate.
+# How this version avoids it:
+#   1. Write ONLY a plain HTTP vhost first (+ a webroot path for the
+#      ACME challenge). No SSL block yet, so nginx -t can never fail
+#      on a missing certificate.
+#   2. Get the certificate with `certbot certonly --webroot`, which
+#      only needs that HTTP vhost to be live - it never touches or
+#      depends on nginx's SSL config.
+#   3. Only THEN append the HTTPS server block, now pointing at a
+#      certificate that actually exists.
+#
+# It also drops the `include options-ssl-nginx.conf` / `ssl_dhparam`
+# lines (those files only get created by certbot's own --nginx
+# installer flow, which we're deliberately not using) and inlines
+# safe modern TLS settings instead. And it drops the
+# `limit_req zone=one` line, since that zone is only defined if your
+# existing nginx.conf happens to define one - safer not to assume.
+#
+# It still does NOT touch:
+#   - /etc/nginx/nginx.conf
+#   - any other site in sites-available/sites-enabled
+#   - any other domain's certificate
 #
 # Run ON YOUR SERVER as root:
 #   sudo bash setup_spotify_ssl.sh you@example.com
@@ -23,25 +38,18 @@ DOMAIN="spotify.heysolo.online"
 BACKEND_PORT="8888"
 EMAIL="${1:-}"
 SITE_FILE="/etc/nginx/sites-available/${DOMAIN}.conf"
+WEBROOT="/var/www/certbot"
+CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 
-echo "== 0/6: Checking what's currently listening on 80 / 443 / $BACKEND_PORT =="
-ss -ltnp 2>/dev/null | grep -E ":80 |:443 |:$BACKEND_PORT " || echo "(nothing matched - fine)"
-echo
-echo "If a PID other than nginx shows up for :80/:443, note it - most likely"
-echo "it IS your existing nginx (expected, not a conflict)."
-echo "If something OTHER than the bot shows up for :$BACKEND_PORT, that port is taken:"
-echo "change BACKEND_PORT in this script AND host/port in webserver.py to match."
-read -p "Press Enter to continue once you've reviewed this ..." _
-
-echo "== 1/6: Ensuring nginx and certbot are installed (skips if already present) =="
+echo "== 1/6: Ensuring nginx and certbot are installed =="
 if ! command -v nginx >/dev/null 2>&1; then
   apt-get update -y
   apt-get install -y nginx
 else
-  echo "nginx already installed - leaving your existing setup untouched."
+  echo "nginx already installed."
 fi
 if ! command -v certbot >/dev/null 2>&1; then
-  apt-get install -y certbot python3-certbot-nginx
+  apt-get install -y certbot
 else
   echo "certbot already installed."
 fi
@@ -55,18 +63,65 @@ if [ -z "$RESOLVED_IP" ]; then
 fi
 echo "$DOMAIN resolves to: $RESOLVED_IP"
 
-echo "== 3/6: Writing an ISOLATED site file: $SITE_FILE =="
-if [ -f "$SITE_FILE" ]; then
-  echo "A file already exists at $SITE_FILE - not overwriting it."
-  echo "Review it manually, then re-run without this check if needed."
-else
+echo "== 3/6: Writing an HTTP-only vhost (no SSL block yet) =="
+mkdir -p "$WEBROOT"
 cat > "$SITE_FILE" <<EOF
-# Separate vhost - only handles $DOMAIN. Does not affect heysolo.online.
+# Separate vhost - only handles $DOMAIN. Does not affect other sites.
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
+
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+EOF
+ln -sf "$SITE_FILE" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+
+nginx -t
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx
+else
+  echo "nginx is not currently running - starting it."
+  if ! systemctl start nginx; then
+    echo "!! nginx failed to start. This usually means something else on this"
+    echo "   machine is already bound to port 80 or 443. Check with:"
+    echo "     sudo ss -ltnp | grep -E ':80 |:443 '"
+    echo "   Fix that conflict, then re-run this script."
+    exit 1
+  fi
+fi
+
+echo "== 4/6: Getting a certificate for $DOMAIN via webroot (independent of nginx's SSL config) =="
+if [ -d "$CERT_DIR" ]; then
+  echo "A certificate already exists at $CERT_DIR - skipping issuance."
+else
+  if [ -n "$EMAIL" ]; then
+    certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
+  else
+    certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email
+  fi
+fi
+
+echo "== 5/6: Adding the HTTPS server block now that the certificate exists =="
+cat > "$SITE_FILE" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
 }
 
 server {
@@ -74,20 +129,16 @@ server {
     listen [::]:443 ssl;
     server_name $DOMAIN;
 
-    # certbot will fill these two lines in automatically in the next step
-    # (creates a fresh, separate certificate just for this subdomain)
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    ssl_certificate $CERT_DIR/fullchain.pem;
+    ssl_certificate_key $CERT_DIR/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
 
     server_tokens off;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-
-    # reuses the "one" rate-limit zone already defined globally in nginx.conf
-    limit_req zone=one burst=20 nodelay;
 
     location = /callback {
         proxy_pass http://127.0.0.1:$BACKEND_PORT/callback;
@@ -102,28 +153,30 @@ server {
     }
 }
 EOF
-fi
 
-ln -sf "$SITE_FILE" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
-
-echo "== 4/6: Getting a certificate JUST for $DOMAIN (does not touch heysolo.online's cert) =="
-# --nginx here only edits the server{} blocks matching -d $DOMAIN, i.e. only
-# the file we just created. It cannot see or modify unrelated domains.
-if [ -n "$EMAIL" ]; then
-  certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
-else
-  certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email
-fi
-
-echo "== 5/6: Validating full nginx config (all sites, including your existing one) =="
 nginx -t
-systemctl reload nginx
+if systemctl reload nginx; then
+  echo "nginx reloaded OK."
+else
+  echo "!! nginx failed to reload with the HTTPS block added. This usually means"
+  echo "   another process already holds port 443 on this machine. Check with:"
+  echo "     sudo ss -ltnp | grep ':443 '"
+  echo "   Free that port (or move that other service behind nginx too), then"
+  echo "   run: sudo systemctl reload nginx"
+  exit 1
+fi
 
-echo "== 6/6: Confirming auto-renewal is active for ALL certs (existing + new) =="
+echo "== 6/6: Making sure renewal keeps nginx in sync =="
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+#!/bin/sh
+systemctl reload nginx
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 systemctl enable --now certbot.timer
 systemctl status certbot.timer --no-pager || true
 
 echo
-echo "Done. https://$DOMAIN/callback now works independently of heysolo.online."
-echo "Next: set the same URL as the Redirect URI in the Spotify dashboard and"
-echo "in the bot's /admin -> Spotify Settings (see README-fa.md)."
+echo "Done. https://$DOMAIN/callback should now work over HTTPS."
+echo "Next: set https://$DOMAIN/callback as the Redirect URI in the Spotify"
+echo "dashboard and in the bot's /admin -> Spotify Settings."
